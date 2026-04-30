@@ -143,6 +143,115 @@ st.markdown(
         overflow: hidden;
         border: 1px solid #e5e7eb;
     }
+
+    .chat-shell {
+        background: #ffffff;
+        border: 1px solid #e5e7eb;
+        border-radius: 20px;
+        padding: 12px;
+        box-shadow: 0 8px 18px rgba(15, 23, 42, 0.05);
+        max-height: 760px;
+        overflow-y: auto;
+    }
+
+    .left-pane-title {
+        font-size: 18px;
+        font-weight: 800;
+        color: #0f172a;
+        margin-bottom: 8px;
+    }
+
+    .chat-header-card {
+        background: #ffffff;
+        border: 1px solid #e5e7eb;
+        border-radius: 18px;
+        padding: 14px 16px;
+        margin-bottom: 14px;
+        box-shadow: 0 8px 18px rgba(15, 23, 42, 0.04);
+    }
+
+    .chat-header-name {
+        font-size: 20px;
+        font-weight: 850;
+        color: #0f172a;
+        margin-bottom: 4px;
+    }
+
+    .chat-header-sub {
+        color: #64748b;
+        font-size: 13px;
+        line-height: 1.5;
+    }
+
+    .chat-area {
+        background: #f8fafc;
+        border: 1px solid #e5e7eb;
+        border-radius: 18px;
+        padding: 16px;
+        min-height: 420px;
+        max-height: 520px;
+        overflow-y: auto;
+        margin-bottom: 14px;
+    }
+
+    .msg-row-left {
+        display: flex;
+        justify-content: flex-start;
+        margin-bottom: 12px;
+    }
+
+    .msg-row-right {
+        display: flex;
+        justify-content: flex-end;
+        margin-bottom: 12px;
+    }
+
+    .msg-bubble-left {
+        max-width: 82%;
+        background: #ffffff;
+        color: #0f172a;
+        border: 1px solid #e5e7eb;
+        border-radius: 18px 18px 18px 6px;
+        padding: 12px 14px;
+        font-size: 14px;
+        line-height: 1.55;
+        box-shadow: 0 4px 10px rgba(15, 23, 42, 0.03);
+        word-break: break-word;
+    }
+
+    .msg-bubble-right {
+        max-width: 82%;
+        background: #1877f2;
+        color: #ffffff;
+        border: 1px solid #1877f2;
+        border-radius: 18px 18px 6px 18px;
+        padding: 12px 14px;
+        font-size: 14px;
+        line-height: 1.55;
+        box-shadow: 0 4px 10px rgba(24, 119, 242, 0.18);
+        word-break: break-word;
+    }
+
+    .bubble-meta-left {
+        font-size: 11px;
+        color: #64748b;
+        margin-top: 6px;
+    }
+
+    .bubble-meta-right {
+        font-size: 11px;
+        color: rgba(255,255,255,0.82);
+        margin-top: 6px;
+    }
+
+    .compose-box {
+        background: #ffffff;
+        border: 1px solid #e5e7eb;
+        border-radius: 18px;
+        padding: 14px;
+        box-shadow: 0 6px 14px rgba(15, 23, 42, 0.04);
+        margin-bottom: 14px;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -576,8 +685,8 @@ def decode_mime_words(value):
     return output.strip()
 
 
-def html_to_text(html):
-    soup = BeautifulSoup(html, "html.parser")
+def html_to_text(html_content):
+    soup = BeautifulSoup(html_content, "html.parser")
     for tag in soup(["script", "style"]):
         tag.extract()
     return soup.get_text(separator="\n").strip()
@@ -1049,45 +1158,48 @@ if page == "Dashboard":
     qa1, qa2, qa3 = st.columns(3)
 
     with qa1:
-        if st.button("Open Inbox"):
-            st.session_state["_nav_target"] = "Inbox"
-            st.info("Sidebar se Inbox open karo.")
+        st.info("Inbox open karne ke liye sidebar se Inbox choose karo.")
 
     with qa2:
-        if st.button("Open Follow-ups"):
-            st.session_state["_nav_target"] = "Follow-ups"
-            st.info("Sidebar se Follow-ups open karo.")
+        st.info("Follow-ups manage karne ke liye sidebar se Follow-ups choose karo.")
 
     with qa3:
-        if st.button("Download Full Backup"):
-            st.download_button(
-                "Download Excel Backup",
-                data=all_db_to_excel(),
-                file_name="mail_crm_backup.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
+        st.download_button(
+            "Download Full Backup",
+            data=all_db_to_excel(),
+            file_name="mail_crm_backup.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
 
 
 # =========================================================
-# PAGE: INBOX
+# PAGE: INBOX - CHAT VIEW
 # =========================================================
 
 elif page == "Inbox":
-    st.subheader("Inbox")
+    st.subheader("Inbox - Chat View")
 
     f1, f2, f3, f4 = st.columns([1.2, 1, 0.7, 0.7])
 
     with f1:
-        search_text = st.text_input("Search inbox", placeholder="keyword, subject, message...")
+        search_text = st.text_input(
+            "Search inbox",
+            placeholder="keyword, subject, message...",
+            key="chat_search_text"
+        )
 
     with f2:
-        from_filter = st.text_input("From filter", placeholder="sender@email.com")
+        from_filter = st.text_input(
+            "From filter",
+            placeholder="sender@email.com",
+            key="chat_from_filter"
+        )
 
     with f3:
-        unread_only = st.checkbox("Unread only", value=False)
+        unread_only = st.checkbox("Unread only", value=False, key="chat_unread_only")
 
     with f4:
-        refresh = st.button("Refresh Inbox", type="primary")
+        refresh = st.button("Refresh Inbox", type="primary", key="chat_refresh_btn")
 
     if "inbox_mails" not in st.session_state or refresh:
         with st.spinner("Inbox loading..."):
@@ -1108,138 +1220,295 @@ elif page == "Inbox":
         st.info("No mails found.")
         st.stop()
 
-    mail_rows = []
-    for idx, m in enumerate(mails):
-        mail_rows.append(
-            {
-                "Index": idx,
-                "Unread": "Yes" if m.get("unread", False) else "No",
-                "From": m["from_email"],
-                "Subject": m["subject"],
-                "Date": m["date"][:30],
-                "Attachments": len(m["attachments"]),
-            }
+    if "selected_mail_idx" not in st.session_state:
+        st.session_state.selected_mail_idx = 0
+
+    if st.session_state.selected_mail_idx >= len(mails):
+        st.session_state.selected_mail_idx = 0
+
+    left_col, right_col = st.columns([1, 2.2], gap="large")
+
+    with left_col:
+        st.markdown('<div class="chat-shell">', unsafe_allow_html=True)
+        st.markdown('<div class="left-pane-title">Conversations</div>', unsafe_allow_html=True)
+
+        unread_count = sum(1 for m in mails if m.get("unread", False))
+        st.caption(f"Total: {len(mails)} | Unread: {unread_count}")
+
+        mail_labels = []
+
+        for idx, m in enumerate(mails):
+            unread_mark = "● " if m.get("unread", False) else ""
+            sender_display = m.get("from_name") or m.get("from_email") or "Unknown"
+            subject_display = m.get("subject") or "(No Subject)"
+            date_display = str(m.get("date", ""))[:22]
+
+            label = f"{unread_mark}{sender_display} | {subject_display[:45]} | {date_display}"
+            mail_labels.append(label)
+
+        selected_idx = st.radio(
+            "Select conversation",
+            options=list(range(len(mails))),
+            index=st.session_state.selected_mail_idx,
+            format_func=lambda i: mail_labels[i],
+            key="chat_mail_selector",
+            label_visibility="collapsed",
         )
 
-    mail_df = pd.DataFrame(mail_rows)
+        st.session_state.selected_mail_idx = selected_idx
+        st.markdown('</div>', unsafe_allow_html=True)
 
-    st.dataframe(mail_df.drop(columns=["Index"]), use_container_width=True)
+    selected_mail = mails[st.session_state.selected_mail_idx]
 
-    options = []
-    for idx, m in enumerate(mails):
-        unread_label = "UNREAD" if m.get("unread", False) else "READ"
-        label = f"{idx + 1}. [{unread_label}] {m['subject'][:80]} | {m['from_email']} | {m['date'][:25]}"
-        options.append(label)
+    sender_name = selected_mail.get("from_name") or selected_mail.get("from_email") or "Unknown"
+    sender_email = selected_mail.get("from_email", "")
+    selected_subject = selected_mail.get("subject", "(No Subject)")
+    selected_date = selected_mail.get("date", "")
+    selected_body = selected_mail.get("body", "")
+    selected_message_id = selected_mail.get("message_id", "")
+    selected_refs = selected_mail.get("references", "")
 
-    selected_label = st.selectbox("Mail select karo", options)
-    selected_index = options.index(selected_label)
-    selected_mail = mails[selected_index]
+    with right_col:
+        safe_sender_name = html.escape(str(sender_name))
+        safe_sender_email = html.escape(str(sender_email))
+        safe_subject = html.escape(str(selected_subject))
+        safe_date = html.escape(str(selected_date))
 
-    st.markdown(
-        f"""
-        <div class="card">
-            <div class="mail-subject">{selected_mail["subject"]}</div>
-            <div class="mail-meta">
-                From: {selected_mail["from_raw"]}<br>
-                To: {selected_mail["to_raw"]}<br>
-                Date: {selected_mail["date"]}<br>
-                Attachments: {len(selected_mail["attachments"])}
+        st.markdown(
+            f"""
+            <div class="chat-header-card">
+                <div class="chat-header-name">{safe_sender_name}</div>
+                <div class="chat-header-sub">
+                    Email: {safe_sender_email}<br>
+                    Subject: {safe_subject}<br>
+                    Date: {safe_date}<br>
+                    Status: {"Unread" if selected_mail.get("unread", False) else "Read"} |
+                    Attachments: {len(selected_mail.get("attachments", []))}
+                </div>
             </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+            """,
+            unsafe_allow_html=True,
+        )
 
-    tabs = st.tabs(["Mail Body", "Reply", "Add Follow-up", "Contact", "Attachments"])
+        st.markdown('<div class="chat-area">', unsafe_allow_html=True)
 
-    with tabs[0]:
-        st.text_area("Message", selected_mail["body"], height=480)
+        incoming_body_html = html.escape(str(selected_body)).replace("\n", "<br>")
 
-    with tabs[1]:
+        st.markdown(
+            f"""
+            <div class="msg-row-left">
+                <div class="msg-bubble-left">
+                    {incoming_body_html}
+                    <div class="bubble-meta-left">{safe_sender_email} • {safe_date}</div>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        sent_df = get_table("sent_log")
+        related_sent = pd.DataFrame()
+
+        if not sent_df.empty and sender_email:
+            related_sent = sent_df[
+                sent_df["to_email"].fillna("").str.lower().str.contains(
+                    sender_email.lower(),
+                    regex=False
+                )
+            ].copy()
+
+            if not related_sent.empty:
+                related_sent = related_sent.sort_values("sent_at")
+
+        if not related_sent.empty:
+            for _, row in related_sent.tail(15).iterrows():
+                sent_body_html = html.escape(str(row.get("body", ""))).replace("\n", "<br>")
+                sent_at = html.escape(str(row.get("sent_at", ""))[:19])
+
+                st.markdown(
+                    f"""
+                    <div class="msg-row-right">
+                        <div class="msg-bubble-right">
+                            {sent_body_html}
+                            <div class="bubble-meta-right">You • {sent_at}</div>
+                        </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        st.markdown('<div class="compose-box">', unsafe_allow_html=True)
+        st.markdown("### Reply")
+
         template_df = get_table("templates")
-
-        template_choice = "Blank"
-        template_body = ""
+        reply_default_body = ""
 
         if not template_df.empty:
             template_names = ["Blank"] + template_df["name"].tolist()
-            template_choice = st.selectbox("Use template", template_names, key="reply_template")
+            template_choice = st.selectbox(
+                "Use template",
+                template_names,
+                key="chat_reply_template"
+            )
 
             if template_choice != "Blank":
-                row = template_df[template_df["name"] == template_choice].iloc[0]
-                template_body = row["body"]
+                trow = template_df[template_df["name"] == template_choice].iloc[0]
+                reply_default_body = trow["body"]
 
-        reply_body = st.text_area(
-            "Reply message",
-            value=template_body,
-            height=260,
-            placeholder="Reply type karo..."
-        )
+        with st.form("reply_form_chat"):
+            reply_body = st.text_area(
+                "Reply message",
+                value=reply_default_body,
+                height=180,
+                placeholder="Reply type karo..."
+            )
 
-        if st.button("Send Reply", type="primary"):
+            quick_followup_after_send = st.checkbox(
+                "Reply ke baad follow-up add karo",
+                value=False
+            )
+
+            send_reply_btn = st.form_submit_button("Send Reply")
+
+        if send_reply_btn:
             if not reply_body.strip():
                 st.warning("Reply message blank hai.")
             else:
                 try:
                     send_reply(selected_mail, reply_body)
                     st.success("Reply sent successfully.")
+
+                    if quick_followup_after_send:
+                        add_followup(
+                            {
+                                "mail_uid": selected_mail.get("uid", ""),
+                                "message_id": selected_message_id,
+                                "thread_ref": selected_refs,
+                                "from_name": sender_name,
+                                "from_email": sender_email,
+                                "subject": selected_subject,
+                                "followup_date": date.today() + timedelta(days=2),
+                                "note": "Reply sent. Awaiting response.",
+                                "next_action": "Check reply",
+                                "priority": "Medium",
+                                "status": "Waiting",
+                                "tags": "reply-sent",
+                                "source": "Inbox",
+                            }
+                        )
+                        st.success("Follow-up also added.")
+
+                    st.rerun()
+
                 except Exception as e:
                     st.error(f"Reply send nahi ho paya: {e}")
 
-    with tabs[2]:
-        with st.form("followup_form"):
-            followup_date = st.date_input("Follow-up date", value=date.today())
-            priority = st.selectbox("Priority", ["High", "Medium", "Low"], index=1)
-            status = st.selectbox("Status", ["Pending", "Waiting", "Snoozed"], index=0)
-            tags = st.text_input("Tags", placeholder="guest-post, payment, supplier")
-            next_action = st.text_input("Next action", placeholder="Call, reply, payment confirm, price ask...")
-            note = st.text_area("Follow-up note", placeholder="Is mail ka follow-up kis baat ke liye lena hai?")
+        st.markdown('</div>', unsafe_allow_html=True)
 
-            submit_followup = st.form_submit_button("Add Follow-up")
+        follow_tab, contact_tab, attach_tab = st.tabs(
+            ["Add Follow-up", "Save Contact", "Attachments"]
+        )
 
-        if submit_followup:
-            add_followup(
-                {
-                    "mail_uid": selected_mail["uid"],
-                    "message_id": selected_mail["message_id"],
-                    "thread_ref": selected_mail["references"],
-                    "from_name": selected_mail["from_name"],
-                    "from_email": selected_mail["from_email"],
-                    "subject": selected_mail["subject"],
-                    "followup_date": followup_date,
-                    "note": note,
-                    "next_action": next_action,
-                    "priority": priority,
-                    "status": status,
-                    "tags": tags,
-                    "source": "Inbox",
-                }
-            )
-            st.success("Follow-up added.")
+        with follow_tab:
+            with st.form("followup_form_chat"):
+                fcol1, fcol2, fcol3 = st.columns(3)
 
-    with tabs[3]:
-        st.markdown("### Save / Update Contact")
+                with fcol1:
+                    followup_date = st.date_input(
+                        "Follow-up date",
+                        value=date.today(),
+                        key="chat_followup_date"
+                    )
 
-        with st.form("contact_form"):
-            name = st.text_input("Name", value=selected_mail["from_name"])
-            email_addr = st.text_input("Email", value=selected_mail["from_email"])
-            phone = st.text_input("Phone")
-            company = st.text_input("Company")
-            category = st.selectbox("Category", ["Customer", "Supplier", "Guest Post", "Agency", "Other"])
-            tags = st.text_input("Tags", placeholder="vip, guest-post, urgent")
-            notes = st.text_area("Notes")
+                with fcol2:
+                    priority = st.selectbox(
+                        "Priority",
+                        ["High", "Medium", "Low"],
+                        index=1,
+                        key="chat_priority"
+                    )
 
-            save_contact = st.form_submit_button("Save Contact")
+                with fcol3:
+                    status = st.selectbox(
+                        "Status",
+                        ["Pending", "Waiting", "Snoozed"],
+                        index=0,
+                        key="chat_status"
+                    )
 
-        if save_contact:
-            upsert_contact(name, email_addr, phone, company, category, notes, tags)
-            st.success("Contact saved/updated.")
+                tags = st.text_input(
+                    "Tags",
+                    placeholder="customer, supplier, guest-post, payment",
+                    key="chat_tags"
+                )
 
-    with tabs[4]:
-        if not selected_mail["attachments"]:
-            st.info("No attachments detected.")
-        else:
-            st.dataframe(pd.DataFrame(selected_mail["attachments"]), use_container_width=True)
+                next_action = st.text_input(
+                    "Next action",
+                    placeholder="Call, reply, payment confirm, price ask...",
+                    key="chat_next_action"
+                )
+
+                note = st.text_area(
+                    "Follow-up note",
+                    placeholder="Is mail ka follow-up kis baat ke liye lena hai?",
+                    key="chat_note"
+                )
+
+                submit_followup = st.form_submit_button("Add Follow-up")
+
+            if submit_followup:
+                add_followup(
+                    {
+                        "mail_uid": selected_mail.get("uid", ""),
+                        "message_id": selected_message_id,
+                        "thread_ref": selected_refs,
+                        "from_name": sender_name,
+                        "from_email": sender_email,
+                        "subject": selected_subject,
+                        "followup_date": followup_date,
+                        "note": note,
+                        "next_action": next_action,
+                        "priority": priority,
+                        "status": status,
+                        "tags": tags,
+                        "source": "Inbox",
+                    }
+                )
+                st.success("Follow-up added.")
+
+        with contact_tab:
+            with st.form("contact_form_chat"):
+                name = st.text_input("Name", value=sender_name, key="chat_contact_name")
+                email_addr = st.text_input("Email", value=sender_email, key="chat_contact_email")
+                phone = st.text_input("Phone", key="chat_contact_phone")
+                company = st.text_input("Company", key="chat_contact_company")
+                category = st.selectbox(
+                    "Category",
+                    ["Customer", "Supplier", "Guest Post", "Agency", "Other"],
+                    key="chat_contact_category"
+                )
+                tags = st.text_input(
+                    "Tags",
+                    placeholder="vip, support, guest-post",
+                    key="chat_contact_tags"
+                )
+                notes = st.text_area("Notes", key="chat_contact_notes")
+
+                save_contact = st.form_submit_button("Save Contact")
+
+            if save_contact:
+                upsert_contact(name, email_addr, phone, company, category, notes, tags)
+                st.success("Contact saved/updated.")
+
+        with attach_tab:
+            attachments = selected_mail.get("attachments", [])
+
+            if not attachments:
+                st.info("No attachments detected.")
+            else:
+                st.dataframe(pd.DataFrame(attachments), use_container_width=True)
 
 
 # =========================================================
@@ -1347,23 +1616,26 @@ elif page == "Follow-ups":
             )
         ]
 
-    st.dataframe(
-        filtered[
-            [
-                "id",
-                "followup_date",
-                "priority",
-                "status",
-                "from_email",
-                "subject",
-                "next_action",
-                "note",
-                "tags",
-                "created_at",
-            ]
-        ],
-        use_container_width=True,
-    )
+    if filtered.empty:
+        st.info("Selected filters me koi follow-up nahi hai.")
+    else:
+        st.dataframe(
+            filtered[
+                [
+                    "id",
+                    "followup_date",
+                    "priority",
+                    "status",
+                    "from_email",
+                    "subject",
+                    "next_action",
+                    "note",
+                    "tags",
+                    "created_at",
+                ]
+            ],
+            use_container_width=True,
+        )
 
     st.markdown("---")
     st.subheader("Manage Selected Follow-up")
@@ -1385,9 +1657,29 @@ elif page == "Follow-ups":
 
         with tab_edit:
             with st.form("edit_followup_form"):
-                new_date = st.date_input("Follow-up date", value=datetime.strptime(row["followup_date"], "%Y-%m-%d").date())
-                new_priority = st.selectbox("Priority", ["High", "Medium", "Low"], index=["High", "Medium", "Low"].index(row["priority"]))
-                new_status = st.selectbox("Status", ["Pending", "Waiting", "Snoozed", "Done"], index=["Pending", "Waiting", "Snoozed", "Done"].index(row["status"]))
+                new_date = st.date_input(
+                    "Follow-up date",
+                    value=datetime.strptime(row["followup_date"], "%Y-%m-%d").date()
+                )
+
+                priority_list = ["High", "Medium", "Low"]
+                current_priority = row["priority"] if row["priority"] in priority_list else "Medium"
+
+                new_priority = st.selectbox(
+                    "Priority",
+                    priority_list,
+                    index=priority_list.index(current_priority)
+                )
+
+                status_list = ["Pending", "Waiting", "Snoozed", "Done"]
+                current_status = row["status"] if row["status"] in status_list else "Pending"
+
+                new_status = st.selectbox(
+                    "Status",
+                    status_list,
+                    index=status_list.index(current_status)
+                )
+
                 new_next_action = st.text_input("Next action", value=row["next_action"] or "")
                 new_tags = st.text_input("Tags", value=row["tags"] or "")
                 new_note = st.text_area("Note", value=row["note"] or "", height=180)
@@ -1395,7 +1687,15 @@ elif page == "Follow-ups":
                 save_edit = st.form_submit_button("Save Changes")
 
             if save_edit:
-                update_followup_fields(selected_id, new_date, new_priority, new_status, new_note, new_next_action, new_tags)
+                update_followup_fields(
+                    selected_id,
+                    new_date,
+                    new_priority,
+                    new_status,
+                    new_note,
+                    new_next_action,
+                    new_tags,
+                )
                 st.success("Follow-up updated.")
                 st.rerun()
 
@@ -1446,7 +1746,10 @@ elif page == "Follow-ups":
 
             with st.form("send_followup_mail"):
                 to_email = st.text_input("To", value=row["from_email"])
-                subject = st.text_input("Subject", value=f"Re: {row['subject']}" if not str(row["subject"]).lower().startswith("re:") else row["subject"])
+                subject = st.text_input(
+                    "Subject",
+                    value=f"Re: {row['subject']}" if not str(row["subject"]).lower().startswith("re:") else row["subject"]
+                )
                 body = st.text_area("Message", value=template_body, height=260)
 
                 send_follow_mail = st.form_submit_button("Send Mail")
