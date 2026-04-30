@@ -1,3 +1,4 @@
+import html
 import imaplib
 import smtplib
 import email
