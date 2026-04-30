@@ -1112,7 +1112,7 @@ elif page == "Inbox":
         mail_rows.append(
             {
                 "Index": idx,
-                "Unread": "Yes" if m["unread"] else "No",
+                "Unread": "Yes" if m.get("unread", False) else "No",
                 "From": m["from_email"],
                 "Subject": m["subject"],
                 "Date": m["date"][:30],
@@ -1126,7 +1126,7 @@ elif page == "Inbox":
 
     options = []
     for idx, m in enumerate(mails):
-        unread_label = "UNREAD" if m["unread"] else "READ"
+        unread_label = "UNREAD" if m.get("unread", False) else "READ"
         label = f"{idx + 1}. [{unread_label}] {m['subject'][:80]} | {m['from_email']} | {m['date'][:25]}"
         options.append(label)
 
