@@ -1,17 +1,19 @@
-import re
-import time
-from datetime import datetime, timezone
-from io import BytesIO
+import imaplib
+import smtplib
+import email
+import sqlite3
+from email.header import decode_header
+from email.message import EmailMessage
+from email.utils import parseaddr, formataddr, make_msgid
+from datetime import date, datetime
+from bs4 import BeautifulSoup
 
 import pandas as pd
-import requests
 import streamlit as st
-import tldextract
-import whois
 
 
 st.set_page_config(
-    page_title="Guest Posting Site Analyzer",
+    page_title="Mail Follow-up Dashboard",
     layout="wide"
 )
 
@@ -53,15 +55,6 @@ st.markdown(
         color: #334155;
     }
 
-    .warning-box {
-        background: #fff7ed;
-        border: 1px solid #fed7aa;
-        border-radius: 18px;
-        padding: 16px 18px;
-        margin-bottom: 18px;
-        color: #7c2d12;
-    }
-
     .kpi-card {
         background: #ffffff;
         border: 1px solid #e5e7eb;
@@ -82,6 +75,26 @@ st.markdown(
         font-weight: 850;
         margin-top: 6px;
     }
+
+    .mail-card {
+        background: #ffffff;
+        border: 1px solid #e5e7eb;
+        border-radius: 16px;
+        padding: 14px 16px;
+        margin-bottom: 10px;
+    }
+
+    .mail-subject {
+        font-size: 18px;
+        font-weight: 800;
+        color: #0f172a;
+    }
+
+    .mail-meta {
+        color: #64748b;
+        font-size: 13px;
+        margin-top: 4px;
+    }
     </style>
     """,
     unsafe_allow_html=True
@@ -89,354 +102,324 @@ st.markdown(
 
 
 # -----------------------------
-# Helper functions
+# Secrets / Config
 # -----------------------------
-def clean_domain(value: str) -> str:
-    if value is None:
-        return ""
-
-    text = str(value).strip().lower()
-
-    text = re.sub(r"^https?://", "", text)
-    text = re.sub(r"^www\.", "", text)
-    text = text.split("/")[0]
-    text = text.split("?")[0]
-    text = text.split("#")[0]
-    text = text.strip()
-
-    ext = tldextract.extract(text)
-
-    if not ext.domain or not ext.suffix:
-        return text
-
-    return f"{ext.domain}.{ext.suffix}"
-
-
-def safe_number(value, default=0.0):
+def get_mail_config():
     try:
-        if value is None:
-            return default
-
-        text = str(value).replace(",", "").replace("%", "").strip()
-
-        if text == "" or text.lower() in ["nan", "none", "na", "n/a"]:
-            return default
-
-        return float(text)
-
+        return {
+            "email": st.secrets["mail"]["email"],
+            "app_password": st.secrets["mail"]["app_password"],
+            "imap_server": st.secrets["mail"].get("imap_server", "imap.gmail.com"),
+            "smtp_server": st.secrets["mail"].get("smtp_server", "smtp.gmail.com"),
+            "smtp_port": int(st.secrets["mail"].get("smtp_port", 587)),
+        }
     except Exception:
-        return default
-
-
-def is_missing(value) -> bool:
-    if value is None:
-        return True
-
-    text = str(value).strip().lower()
-
-    return text in ["", "nan", "none", "na", "n/a", "-"]
-
-
-def traffic_bucket(value) -> str:
-    if is_missing(value):
-        return "Need Check"
-
-    try:
-        v = float(str(value).replace(",", "").strip())
-    except Exception:
-        return "Need Check"
-
-    if v <= 0:
-        return "Very Low"
-    if v < 100:
-        return "Very Low"
-    if v < 500:
-        return "Low"
-    if v < 2000:
-        return "Medium"
-    if v < 10000:
-        return "Good"
-    return "High"
-
-
-def check_live_status(domain: str) -> dict:
-    result = {
-        "Live Status": "Unknown",
-        "HTTPS": "No",
-        "Final URL": "",
-        "HTTP Code": "",
-        "Title": "",
-    }
-
-    headers = {
-        "User-Agent": "Mozilla/5.0 Guest Posting Analyzer"
-    }
-
-    for scheme in ["https", "http"]:
-        url = f"{scheme}://{domain}"
-
-        try:
-            r = requests.get(
-                url,
-                timeout=8,
-                headers=headers,
-                allow_redirects=True
-            )
-
-            result["HTTP Code"] = r.status_code
-            result["Final URL"] = r.url
-
-            if scheme == "https" or r.url.startswith("https://"):
-                result["HTTPS"] = "Yes"
-
-            if r.status_code < 400:
-                result["Live Status"] = "Live"
-
-                title_match = re.search(
-                    r"<title[^>]*>(.*?)</title>",
-                    r.text,
-                    re.I | re.S
-                )
-
-                if title_match:
-                    title = re.sub(r"\s+", " ", title_match.group(1)).strip()
-                    result["Title"] = title[:120]
-
-                return result
-
-        except Exception:
-            continue
-
-    result["Live Status"] = "Dead / Blocked"
-    return result
-
-
-def get_domain_age(domain: str) -> dict:
-    result = {
-        "Creation Date": "",
-        "Domain Age Years": "",
-        "WHOIS Status": "Not Checked"
-    }
-
-    try:
-        w = whois.whois(domain)
-        creation_date = w.creation_date
-
-        if isinstance(creation_date, list):
-            creation_date = creation_date[0]
-
-        if not creation_date:
-            result["WHOIS Status"] = "Not Found"
-            return result
-
-        if creation_date.tzinfo is None:
-            creation_date = creation_date.replace(tzinfo=timezone.utc)
-
-        now = datetime.now(timezone.utc)
-        age_years = (now - creation_date).days / 365.25
-
-        result["Creation Date"] = creation_date.strftime("%Y-%m-%d")
-        result["Domain Age Years"] = round(age_years, 2)
-        result["WHOIS Status"] = "Found"
-
-    except Exception:
-        result["WHOIS Status"] = "Failed"
-
-    return result
-
-
-def google_index_link(domain: str) -> str:
-    return f"https://www.google.com/search?q=site%3A{domain}"
-
-
-def ahrefs_link(domain: str) -> str:
-    return "https://ahrefs.com/traffic-checker/"
-
-
-def whois_link(domain: str) -> str:
-    return f"https://www.whois.com/whois/{domain}"
-
-
-def dapa_link(domain: str) -> str:
-    return "https://www.dapachecker.org/spam-score-checker"
-
-
-def score_site(row) -> tuple:
-    missing_required = []
-
-    for col in ["DA", "Spam Score", "Ahrefs Traffic", "Indexed Pages"]:
-        if is_missing(row.get(col, "")):
-            missing_required.append(col)
-
-    if missing_required:
-        return (
-            0,
-            "Need Manual Check",
-            "Missing: " + ", ".join(missing_required)
+        st.error(
+            "Mail secrets set nahi hain. Streamlit Secrets me [mail] config add karo."
         )
-
-    score = 0
-    reasons = []
-
-    da = safe_number(row.get("DA", 0))
-    pa = safe_number(row.get("PA", 0))
-    spam = safe_number(row.get("Spam Score", 0))
-    traffic = safe_number(row.get("Ahrefs Traffic", 0))
-    age = safe_number(row.get("Domain Age Years", 0))
-    indexed = safe_number(row.get("Indexed Pages", 0))
-    price = safe_number(row.get("Price", 0))
-
-    live = row.get("Live Status", "")
-    https = row.get("HTTPS", "")
-
-    if live == "Live":
-        score += 15
-        reasons.append("site live")
-    elif live == "Skipped":
-        reasons.append("live check skipped")
-    else:
-        score -= 30
-        reasons.append("site not opening")
-
-    if https == "Yes":
-        score += 5
-        reasons.append("https available")
-
-    if da >= 40:
-        score += 20
-        reasons.append("DA strong")
-    elif da >= 30:
-        score += 15
-        reasons.append("DA good")
-    elif da >= 20:
-        score += 8
-        reasons.append("DA average")
-    elif da > 0:
-        score += 2
-        reasons.append("DA low")
-
-    if pa >= 30:
-        score += 8
-        reasons.append("PA good")
-    elif pa > 0:
-        score += 3
-        reasons.append("PA low/average")
-
-    if spam <= 3:
-        score += 15
-        reasons.append("spam low")
-    elif spam <= 10:
-        score += 5
-        reasons.append("spam medium")
-    else:
-        score -= 25
-        reasons.append("spam high")
-
-    if traffic >= 10000:
-        score += 25
-        reasons.append("traffic high")
-    elif traffic >= 2000:
-        score += 20
-        reasons.append("traffic good")
-    elif traffic >= 500:
-        score += 12
-        reasons.append("traffic medium")
-    elif traffic >= 100:
-        score += 5
-        reasons.append("traffic low")
-    else:
-        score -= 10
-        reasons.append("traffic very low")
-
-    if age >= 3:
-        score += 15
-        reasons.append("aged domain")
-    elif age >= 1:
-        score += 8
-        reasons.append("domain age ok")
-    elif age > 0:
-        score -= 5
-        reasons.append("new domain")
-    else:
-        reasons.append("domain age missing")
-
-    if indexed >= 500:
-        score += 12
-        reasons.append("indexed pages strong")
-    elif indexed >= 100:
-        score += 8
-        reasons.append("indexed pages ok")
-    elif indexed >= 20:
-        score += 3
-        reasons.append("low indexed pages")
-    else:
-        score -= 10
-        reasons.append("very low/no indexed pages")
-
-    if price > 0:
-        if score >= 70 and price <= 1500:
-            score += 8
-            reasons.append("good value price")
-        elif price > 5000 and score < 70:
-            score -= 10
-            reasons.append("price high vs quality")
-
-    if score >= 75:
-        decision = "Good"
-    elif score >= 55:
-        decision = "Average"
-    elif score >= 35:
-        decision = "Risky"
-    else:
-        decision = "Avoid"
-
-    return score, decision, ", ".join(reasons)
+        st.stop()
 
 
-def build_initial_df(domains):
-    rows = []
+MAIL_CONFIG = get_mail_config()
+DB_PATH = "mail_followups.db"
 
-    for raw in domains:
-        domain = clean_domain(raw)
 
-        if not domain:
-            continue
+# -----------------------------
+# Database
+# -----------------------------
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
 
-        rows.append({
-            "Input": raw,
-            "Domain": domain,
-            "DA": "",
-            "PA": "",
-            "Spam Score": "",
-            "Ahrefs Traffic": "",
-            "Indexed Pages": "",
-            "Price": "",
-            "Niche": "",
-            "Contact": "",
-            "Notes": "",
-        })
-
-    df = pd.DataFrame(rows)
-
-    if df.empty:
-        return df
-
-    df["Duplicate"] = df.duplicated(subset=["Domain"], keep=False).map(
-        lambda x: "Yes" if x else "No"
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS followups (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            mail_uid TEXT,
+            from_email TEXT,
+            subject TEXT,
+            followup_date TEXT,
+            note TEXT,
+            priority TEXT,
+            status TEXT DEFAULT 'Pending',
+            created_at TEXT
+        )
+        """
     )
 
-    df = df.drop_duplicates(subset=["Domain"], keep="first").reset_index(drop=True)
+    conn.commit()
+    conn.close()
 
+
+def add_followup(mail_uid, from_email, subject, followup_date, note, priority):
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+
+    cur.execute(
+        """
+        INSERT INTO followups
+        (mail_uid, from_email, subject, followup_date, note, priority, status, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            str(mail_uid),
+            from_email,
+            subject,
+            str(followup_date),
+            note,
+            priority,
+            "Pending",
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        ),
+    )
+
+    conn.commit()
+    conn.close()
+
+
+def get_followups(status_filter=None):
+    conn = sqlite3.connect(DB_PATH)
+
+    if status_filter:
+        df = pd.read_sql_query(
+            "SELECT * FROM followups WHERE status = ? ORDER BY followup_date ASC, id DESC",
+            conn,
+            params=(status_filter,),
+        )
+    else:
+        df = pd.read_sql_query(
+            "SELECT * FROM followups ORDER BY followup_date ASC, id DESC",
+            conn,
+        )
+
+    conn.close()
     return df
 
 
-def to_excel(df):
-    buffer = BytesIO()
+def mark_followup_done(followup_id):
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
 
-    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-        df.to_excel(writer, sheet_name="Guest_Post_Analysis", index=False)
+    cur.execute(
+        "UPDATE followups SET status = 'Done' WHERE id = ?",
+        (int(followup_id),),
+    )
 
-    return buffer.getvalue()
+    conn.commit()
+    conn.close()
+
+
+def delete_followup(followup_id):
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+
+    cur.execute(
+        "DELETE FROM followups WHERE id = ?",
+        (int(followup_id),),
+    )
+
+    conn.commit()
+    conn.close()
+
+
+init_db()
+
+
+# -----------------------------
+# Mail helpers
+# -----------------------------
+def decode_mime_words(value):
+    if not value:
+        return ""
+
+    decoded_parts = decode_header(value)
+    output = ""
+
+    for part, encoding in decoded_parts:
+        if isinstance(part, bytes):
+            try:
+                output += part.decode(encoding or "utf-8", errors="ignore")
+            except Exception:
+                output += part.decode("utf-8", errors="ignore")
+        else:
+            output += str(part)
+
+    return output.strip()
+
+
+def html_to_text(html):
+    soup = BeautifulSoup(html, "html.parser")
+    return soup.get_text(separator="\n").strip()
+
+
+def get_body_from_message(msg):
+    plain_body = ""
+    html_body = ""
+
+    if msg.is_multipart():
+        for part in msg.walk():
+            content_type = part.get_content_type()
+            disposition = str(part.get("Content-Disposition") or "")
+
+            if "attachment" in disposition.lower():
+                continue
+
+            try:
+                payload = part.get_payload(decode=True)
+                charset = part.get_content_charset() or "utf-8"
+
+                if payload:
+                    decoded = payload.decode(charset, errors="ignore")
+
+                    if content_type == "text/plain" and not plain_body:
+                        plain_body = decoded
+
+                    elif content_type == "text/html" and not html_body:
+                        html_body = decoded
+
+            except Exception:
+                continue
+    else:
+        try:
+            payload = msg.get_payload(decode=True)
+            charset = msg.get_content_charset() or "utf-8"
+
+            if payload:
+                decoded = payload.decode(charset, errors="ignore")
+
+                if msg.get_content_type() == "text/html":
+                    html_body = decoded
+                else:
+                    plain_body = decoded
+
+        except Exception:
+            pass
+
+    if plain_body:
+        return plain_body.strip()
+
+    if html_body:
+        return html_to_text(html_body)
+
+    return ""
+
+
+def imap_connect():
+    mail = imaplib.IMAP4_SSL(MAIL_CONFIG["imap_server"])
+    mail.login(MAIL_CONFIG["email"], MAIL_CONFIG["app_password"])
+    return mail
+
+
+def fetch_inbox(limit=20, search_text=""):
+    mail = imap_connect()
+    mail.select("INBOX")
+
+    if search_text.strip():
+        search_query = f'(TEXT "{search_text.strip()}")'
+        status, data = mail.search(None, search_query)
+    else:
+        status, data = mail.search(None, "ALL")
+
+    if status != "OK":
+        mail.logout()
+        return []
+
+    ids = data[0].split()
+    ids = ids[-limit:]
+    ids.reverse()
+
+    mails = []
+
+    for num in ids:
+        status, msg_data = mail.fetch(num, "(RFC822)")
+
+        if status != "OK":
+            continue
+
+        raw_email = msg_data[0][1]
+        msg = email.message_from_bytes(raw_email)
+
+        subject = decode_mime_words(msg.get("Subject"))
+        from_raw = decode_mime_words(msg.get("From"))
+        from_name, from_email = parseaddr(from_raw)
+
+        date_raw = msg.get("Date", "")
+        body = get_body_from_message(msg)
+
+        mails.append(
+            {
+                "uid": num.decode(),
+                "from_name": from_name,
+                "from_email": from_email,
+                "from_raw": from_raw,
+                "subject": subject,
+                "date": date_raw,
+                "body": body,
+                "message_id": msg.get("Message-ID", ""),
+                "in_reply_to": msg.get("In-Reply-To", ""),
+                "references": msg.get("References", ""),
+            }
+        )
+
+    mail.logout()
+    return mails
+
+
+def send_new_mail(to_email, subject, body, cc_email=""):
+    msg = EmailMessage()
+    msg["From"] = MAIL_CONFIG["email"]
+    msg["To"] = to_email
+
+    if cc_email.strip():
+        msg["Cc"] = cc_email.strip()
+
+    msg["Subject"] = subject
+    msg["Message-ID"] = make_msgid()
+    msg.set_content(body)
+
+    recipients = [x.strip() for x in to_email.split(",") if x.strip()]
+
+    if cc_email.strip():
+        recipients += [x.strip() for x in cc_email.split(",") if x.strip()]
+
+    with smtplib.SMTP(MAIL_CONFIG["smtp_server"], MAIL_CONFIG["smtp_port"]) as server:
+        server.starttls()
+        server.login(MAIL_CONFIG["email"], MAIL_CONFIG["app_password"])
+        server.send_message(msg, to_addrs=recipients)
+
+
+def send_reply(original_mail, reply_body):
+    to_email = original_mail["from_email"]
+    subject = original_mail["subject"]
+
+    if not subject.lower().startswith("re:"):
+        subject = "Re: " + subject
+
+    msg = EmailMessage()
+    msg["From"] = MAIL_CONFIG["email"]
+    msg["To"] = to_email
+    msg["Subject"] = subject
+    msg["Message-ID"] = make_msgid()
+
+    if original_mail.get("message_id"):
+        msg["In-Reply-To"] = original_mail["message_id"]
+
+    references = original_mail.get("references") or ""
+
+    if original_mail.get("message_id"):
+        references = (references + " " + original_mail["message_id"]).strip()
+
+    if references:
+        msg["References"] = references
+
+    final_body = reply_body.strip()
+
+    msg.set_content(final_body)
+
+    with smtplib.SMTP(MAIL_CONFIG["smtp_server"], MAIL_CONFIG["smtp_port"]) as server:
+        server.starttls()
+        server.login(MAIL_CONFIG["email"], MAIL_CONFIG["app_password"])
+        server.send_message(msg)
 
 
 # -----------------------------
@@ -444,355 +427,339 @@ def to_excel(df):
 # -----------------------------
 st.markdown(
     """
-    <div class="main-title">Guest Posting Site Analyzer</div>
+    <div class="main-title">Mail Follow-up Dashboard</div>
     <div class="sub-title">
-        Domain list paste karo, quick check links open karo, values fill karo, aur final decision lo.
+        Inbox read karo, new mail bhejo, reply karo, aur important emails ke follow-ups track karo.
     </div>
     """,
-    unsafe_allow_html=True
+    unsafe_allow_html=True,
 )
 
 st.markdown(
-    """
+    f"""
     <div class="info-box">
-        <b>Workflow:</b> Domain list paste/upload → Ahrefs, Whois, DAPA, Google index links open karo →
-        DA/PA/Spam/Traffic/Indexed pages fill karo → app Good / Average / Risky / Avoid decision dega.
+        Connected mailbox: <b>{MAIL_CONFIG["email"]}</b><br>
+        Basic MVP: read inbox, send mail, reply mail, follow-up add/list/done.
     </div>
     """,
-    unsafe_allow_html=True
-)
-
-st.markdown(
-    """
-    <div class="warning-box">
-        <b>Note:</b> App fake DA/Traffic/Spam values generate nahi karega.
-        Agar important fields blank rahenge to Decision <b>Need Manual Check</b> aayega.
-    </div>
-    """,
-    unsafe_allow_html=True
+    unsafe_allow_html=True,
 )
 
 
 # -----------------------------
-# Input
+# Sidebar
 # -----------------------------
 with st.sidebar:
-    st.header("Input Sites")
+    st.header("Navigation")
 
-    input_mode = st.radio(
-        "Input type",
-        ["Paste domain list", "Upload Excel/CSV"]
+    page = st.radio(
+        "Go to",
+        ["Inbox", "Compose", "Follow-ups"],
     )
 
-    run_live = st.checkbox("Live/HTTPS check run karo", value=True)
-    run_whois = st.checkbox("WHOIS domain age auto-check run karo", value=True)
+    st.markdown("---")
 
-    st.caption("WHOIS auto-check slow/fail ho sakta hai. Whois.com link bhi table me diya hai.")
-
-
-domains = []
-
-if input_mode == "Paste domain list":
-    raw_text = st.text_area(
-        "Domain/URL list paste karo, one per line",
-        height=220,
-        placeholder="example.com\nhttps://www.sample.com/blog\nanother-site.in"
+    inbox_limit = st.number_input(
+        "Inbox mail limit",
+        min_value=5,
+        max_value=100,
+        value=20,
+        step=5,
     )
 
-    domains = [x.strip() for x in raw_text.splitlines() if x.strip()]
 
+# -----------------------------
+# Follow-up KPIs
+# -----------------------------
+follow_df_all = get_followups()
+
+today_str = date.today().strftime("%Y-%m-%d")
+
+if not follow_df_all.empty:
+    pending_df = follow_df_all[follow_df_all["status"] == "Pending"].copy()
+    today_count = int((pending_df["followup_date"] == today_str).sum())
+    overdue_count = int((pending_df["followup_date"] < today_str).sum())
+    upcoming_count = int((pending_df["followup_date"] > today_str).sum())
 else:
-    uploaded = st.file_uploader(
-        "Upload Excel/CSV file",
-        type=["xlsx", "xls", "csv"]
-    )
+    today_count = 0
+    overdue_count = 0
+    upcoming_count = 0
 
-    if uploaded is not None:
-        try:
-            if uploaded.name.lower().endswith(".csv"):
-                upload_df = pd.read_csv(uploaded)
-            else:
-                upload_df = pd.read_excel(uploaded)
+k1, k2, k3, k4 = st.columns(4)
 
-            st.write("Uploaded columns:", list(upload_df.columns))
-
-            possible_cols = list(upload_df.columns)
-            selected_col = st.selectbox(
-                "Website/domain column select karo",
-                possible_cols
-            )
-
-            domains = upload_df[selected_col].dropna().astype(str).tolist()
-
-        except Exception as e:
-            st.error(f"File read nahi ho payi: {e}")
-
-if not domains:
-    st.info("Pehle domain list paste karo ya Excel/CSV upload karo.")
-    st.stop()
-
-
-if "last_domains_text" not in st.session_state:
-    st.session_state.last_domains_text = ""
-
-current_domains_text = "\n".join(domains)
-
-if (
-    "guest_df" not in st.session_state
-    or st.session_state.last_domains_text != current_domains_text
-):
-    st.session_state.guest_df = build_initial_df(domains)
-    st.session_state.last_domains_text = current_domains_text
-
-if st.button("Prepare / Reset Domain Table"):
-    st.session_state.guest_df = build_initial_df(domains)
-    st.session_state.last_domains_text = current_domains_text
-    if "result_df" in st.session_state:
-        del st.session_state.result_df
-    st.rerun()
-
-
-df = st.session_state.guest_df.copy()
-
-
-# -----------------------------
-# KPI before analysis
-# -----------------------------
-c1, c2, c3, c4 = st.columns(4)
-
-with c1:
+with k1:
     st.markdown(
         f"""
         <div class="kpi-card">
-            <div class="kpi-label">Total Input Domains</div>
-            <div class="kpi-value">{len(domains)}</div>
+            <div class="kpi-label">Today Follow-ups</div>
+            <div class="kpi-value">{today_count}</div>
         </div>
         """,
-        unsafe_allow_html=True
+        unsafe_allow_html=True,
     )
 
-with c2:
+with k2:
     st.markdown(
         f"""
         <div class="kpi-card">
-            <div class="kpi-label">Unique Domains</div>
-            <div class="kpi-value">{len(df)}</div>
+            <div class="kpi-label">Overdue</div>
+            <div class="kpi-value">{overdue_count}</div>
         </div>
         """,
-        unsafe_allow_html=True
+        unsafe_allow_html=True,
     )
 
-with c3:
-    duplicate_count = max(len(domains) - len(df), 0)
+with k3:
     st.markdown(
         f"""
         <div class="kpi-card">
-            <div class="kpi-label">Duplicates Removed</div>
-            <div class="kpi-value">{duplicate_count}</div>
+            <div class="kpi-label">Upcoming</div>
+            <div class="kpi-value">{upcoming_count}</div>
         </div>
         """,
-        unsafe_allow_html=True
+        unsafe_allow_html=True,
     )
 
-with c4:
+with k4:
+    total_pending = today_count + overdue_count + upcoming_count
     st.markdown(
         f"""
         <div class="kpi-card">
-            <div class="kpi-label">Ready for Analysis</div>
-            <div class="kpi-value">Yes</div>
+            <div class="kpi-label">Total Pending</div>
+            <div class="kpi-value">{total_pending}</div>
         </div>
         """,
-        unsafe_allow_html=True
+        unsafe_allow_html=True,
     )
-
 
 st.markdown("---")
 
 
 # -----------------------------
-# Manual metrics editor
+# Inbox page
 # -----------------------------
-st.subheader("1. Fill Manual Metrics")
+if page == "Inbox":
+    st.subheader("Inbox")
 
-st.caption(
-    "Ahrefs se traffic, DAPA checker se DA/PA/Spam, Google site:domain se indexed pages ka idea fill karo."
-)
-
-edited_df = st.data_editor(
-    df,
-    use_container_width=True,
-    num_rows="fixed",
-    key="editor",
-    column_config={
-        "DA": st.column_config.NumberColumn("DA", min_value=0, max_value=100),
-        "PA": st.column_config.NumberColumn("PA", min_value=0, max_value=100),
-        "Spam Score": st.column_config.NumberColumn("Spam Score", min_value=0, max_value=100),
-        "Ahrefs Traffic": st.column_config.NumberColumn("Ahrefs Traffic", min_value=0),
-        "Indexed Pages": st.column_config.NumberColumn("Indexed Pages", min_value=0),
-        "Price": st.column_config.NumberColumn("Price", min_value=0),
-    }
-)
-
-st.session_state.guest_df = edited_df.copy()
-
-
-# -----------------------------
-# Links for manual checks
-# -----------------------------
-st.subheader("2. Quick Manual Check Links")
-
-link_df = edited_df[["Domain"]].copy()
-link_df["Ahrefs Traffic Checker"] = link_df["Domain"].apply(ahrefs_link)
-link_df["Whois Check"] = link_df["Domain"].apply(whois_link)
-link_df["DA PA Spam Checker"] = link_df["Domain"].apply(dapa_link)
-link_df["Google Index Check"] = link_df["Domain"].apply(google_index_link)
-
-st.dataframe(
-    link_df,
-    use_container_width=True,
-    column_config={
-        "Ahrefs Traffic Checker": st.column_config.LinkColumn("Ahrefs Traffic Checker"),
-        "Whois Check": st.column_config.LinkColumn("Whois Check"),
-        "DA PA Spam Checker": st.column_config.LinkColumn("DA PA Spam Checker"),
-        "Google Index Check": st.column_config.LinkColumn("Google Index Check"),
-    }
-)
-
-
-# -----------------------------
-# Analysis
-# -----------------------------
-st.subheader("3. Run Analysis")
-
-if st.button("Run Guest Posting Analysis", type="primary"):
-    result_df = edited_df.copy()
-
-    live_rows = []
-    age_rows = []
-
-    progress = st.progress(0)
-    status = st.empty()
-
-    total = len(result_df)
-
-    for i, domain in enumerate(result_df["Domain"].tolist()):
-        status.write(f"Checking {i + 1}/{total}: {domain}")
-
-        if run_live:
-            live_data = check_live_status(domain)
-        else:
-            live_data = {
-                "Live Status": "Skipped",
-                "HTTPS": "Skipped",
-                "Final URL": "",
-                "HTTP Code": "",
-                "Title": "",
-            }
-
-        if run_whois:
-            age_data = get_domain_age(domain)
-            time.sleep(0.4)
-        else:
-            age_data = {
-                "Creation Date": "",
-                "Domain Age Years": "",
-                "WHOIS Status": "Skipped"
-            }
-
-        live_rows.append(live_data)
-        age_rows.append(age_data)
-
-        progress.progress((i + 1) / total)
-
-    live_df = pd.DataFrame(live_rows)
-    age_df = pd.DataFrame(age_rows)
-
-    result_df = pd.concat([result_df.reset_index(drop=True), live_df, age_df], axis=1)
-
-    result_df["Traffic Bucket"] = result_df["Ahrefs Traffic"].apply(traffic_bucket)
-
-    scores = result_df.apply(score_site, axis=1)
-    result_df["Score"] = [x[0] for x in scores]
-    result_df["Decision"] = [x[1] for x in scores]
-    result_df["Reason"] = [x[2] for x in scores]
-
-    decision_order = {
-        "Good": 1,
-        "Average": 2,
-        "Risky": 3,
-        "Need Manual Check": 4,
-        "Avoid": 5,
-    }
-
-    result_df["Decision Order"] = result_df["Decision"].map(decision_order).fillna(99)
-
-    result_df = result_df.sort_values(
-        by=["Decision Order", "Score"],
-        ascending=[True, False]
-    ).drop(columns=["Decision Order"]).reset_index(drop=True)
-
-    st.session_state.result_df = result_df
-
-    status.empty()
-    progress.empty()
-    st.success("Analysis complete!")
-
-
-if "result_df" in st.session_state:
-    result_df = st.session_state.result_df.copy()
-
-    st.markdown("---")
-    st.subheader("Final Result")
-
-    r1, r2, r3, r4, r5 = st.columns(5)
-
-    with r1:
-        st.metric("Good", int((result_df["Decision"] == "Good").sum()))
-
-    with r2:
-        st.metric("Average", int((result_df["Decision"] == "Average").sum()))
-
-    with r3:
-        st.metric("Risky", int((result_df["Decision"] == "Risky").sum()))
-
-    with r4:
-        st.metric("Need Check", int((result_df["Decision"] == "Need Manual Check").sum()))
-
-    with r5:
-        st.metric("Avoid", int((result_df["Decision"] == "Avoid").sum()))
-
-    decision_filter = st.multiselect(
-        "Decision filter",
-        ["Good", "Average", "Risky", "Need Manual Check", "Avoid"],
-        default=["Good", "Average", "Risky", "Need Manual Check", "Avoid"]
+    search_text = st.text_input(
+        "Search inbox",
+        placeholder="sender, subject, keyword..."
     )
 
-    filtered_df = result_df[result_df["Decision"].isin(decision_filter)].copy()
+    refresh = st.button("Refresh Inbox", type="primary")
+
+    if "inbox_mails" not in st.session_state or refresh:
+        with st.spinner("Inbox loading..."):
+            try:
+                st.session_state.inbox_mails = fetch_inbox(
+                    limit=int(inbox_limit),
+                    search_text=search_text,
+                )
+            except Exception as e:
+                st.error(f"Inbox fetch nahi ho paya: {e}")
+                st.stop()
+
+    mails = st.session_state.inbox_mails
+
+    if not mails:
+        st.info("No mails found.")
+        st.stop()
+
+    mail_options = []
+
+    for idx, m in enumerate(mails):
+        label = f"{idx + 1}. {m['subject'][:70]} | {m['from_email']} | {m['date'][:25]}"
+        mail_options.append(label)
+
+    selected_label = st.selectbox(
+        "Mail select karo",
+        mail_options,
+    )
+
+    selected_index = mail_options.index(selected_label)
+    selected_mail = mails[selected_index]
+
+    st.markdown(
+        f"""
+        <div class="mail-card">
+            <div class="mail-subject">{selected_mail["subject"]}</div>
+            <div class="mail-meta">
+                From: {selected_mail["from_raw"]}<br>
+                Date: {selected_mail["date"]}
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    tab1, tab2, tab3 = st.tabs(["Mail Body", "Reply", "Add Follow-up"])
+
+    with tab1:
+        st.text_area(
+            "Message",
+            selected_mail["body"],
+            height=430,
+        )
+
+    with tab2:
+        reply_body = st.text_area(
+            "Reply message",
+            height=220,
+            placeholder="Reply type karo..."
+        )
+
+        if st.button("Send Reply"):
+            if not reply_body.strip():
+                st.warning("Reply message blank hai.")
+            else:
+                try:
+                    send_reply(selected_mail, reply_body)
+                    st.success("Reply sent successfully.")
+                except Exception as e:
+                    st.error(f"Reply send nahi ho paya: {e}")
+
+    with tab3:
+        with st.form("followup_form"):
+            followup_date = st.date_input(
+                "Follow-up date",
+                value=date.today(),
+            )
+
+            priority = st.selectbox(
+                "Priority",
+                ["Medium", "High", "Low"],
+            )
+
+            note = st.text_area(
+                "Follow-up note",
+                placeholder="Is mail ka follow-up kis baat ke liye lena hai?"
+            )
+
+            submit_followup = st.form_submit_button("Add Follow-up")
+
+        if submit_followup:
+            add_followup(
+                mail_uid=selected_mail["uid"],
+                from_email=selected_mail["from_email"],
+                subject=selected_mail["subject"],
+                followup_date=followup_date,
+                note=note,
+                priority=priority,
+            )
+
+            st.success("Follow-up added.")
+
+
+# -----------------------------
+# Compose page
+# -----------------------------
+elif page == "Compose":
+    st.subheader("Compose New Mail")
+
+    with st.form("compose_form"):
+        to_email = st.text_input("To", placeholder="customer@example.com")
+        cc_email = st.text_input("CC", placeholder="optional")
+        subject = st.text_input("Subject")
+        body = st.text_area("Message", height=320)
+
+        send_btn = st.form_submit_button("Send Mail")
+
+    if send_btn:
+        if not to_email.strip() or not subject.strip() or not body.strip():
+            st.warning("To, Subject aur Message required hain.")
+        else:
+            try:
+                send_new_mail(
+                    to_email=to_email,
+                    cc_email=cc_email,
+                    subject=subject,
+                    body=body,
+                )
+                st.success("Mail sent successfully.")
+            except Exception as e:
+                st.error(f"Mail send nahi ho paya: {e}")
+
+
+# -----------------------------
+# Follow-ups page
+# -----------------------------
+elif page == "Follow-ups":
+    st.subheader("Follow-ups")
+
+    follow_df = get_followups()
+
+    if follow_df.empty:
+        st.info("Abhi koi follow-up add nahi hai.")
+        st.stop()
+
+    status_filter = st.selectbox(
+        "Status filter",
+        ["Pending", "Done", "All"],
+    )
+
+    filtered = follow_df.copy()
+
+    if status_filter != "All":
+        filtered = filtered[filtered["status"] == status_filter].copy()
+
+    date_filter = st.selectbox(
+        "Date filter",
+        ["All", "Overdue", "Today", "Upcoming"],
+    )
+
+    if date_filter == "Overdue":
+        filtered = filtered[
+            (filtered["status"] == "Pending")
+            & (filtered["followup_date"] < today_str)
+        ].copy()
+    elif date_filter == "Today":
+        filtered = filtered[
+            (filtered["status"] == "Pending")
+            & (filtered["followup_date"] == today_str)
+        ].copy()
+    elif date_filter == "Upcoming":
+        filtered = filtered[
+            (filtered["status"] == "Pending")
+            & (filtered["followup_date"] > today_str)
+        ].copy()
 
     st.dataframe(
-        filtered_df,
+        filtered,
         use_container_width=True,
-        column_config={
-            "Final URL": st.column_config.LinkColumn("Final URL"),
-        }
     )
 
-    good_df = result_df[result_df["Decision"].isin(["Good", "Average"])].copy()
+    st.markdown("---")
 
-    col_a, col_b = st.columns(2)
+    st.subheader("Update Follow-up")
 
-    with col_a:
-        st.download_button(
-            "Download Full Analysis Excel",
-            data=to_excel(result_df),
-            file_name="guest_posting_site_analysis.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+    pending_or_all = filtered.copy()
 
-    with col_b:
-        st.download_button(
-            "Download Only Good/Average Sites",
-            data=to_excel(good_df),
-            file_name="good_average_guest_posting_sites.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+    if pending_or_all.empty:
+        st.info("Selected filter me koi follow-up nahi hai.")
+    else:
+        options = []
+
+        for _, row in pending_or_all.iterrows():
+            label = (
+                f"#{row['id']} | {row['followup_date']} | "
+                f"{row['priority']} | {row['from_email']} | {row['subject'][:60]}"
+            )
+            options.append(label)
+
+        selected = st.selectbox("Follow-up select karo", options)
+
+        selected_id = int(selected.split("|")[0].replace("#", "").strip())
+
+        c_done, c_delete = st.columns(2)
+
+        with c_done:
+            if st.button("Mark as Done"):
+                mark_followup_done(selected_id)
+                st.success("Follow-up marked as done.")
+                st.rerun()
+
+        with c_delete:
+            if st.button("Delete Follow-up"):
+                delete_followup(selected_id)
+                st.success("Follow-up deleted.")
+                st.rerun()
