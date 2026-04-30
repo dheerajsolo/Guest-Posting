@@ -10,7 +10,5 @@ venv/
 
 .streamlit/secrets.toml
 
-*.xlsx
-*.xls
-*.csv
 *.db
+database.db
