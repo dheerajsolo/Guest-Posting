@@ -53,6 +53,15 @@ st.markdown(
         color: #334155;
     }
 
+    .warning-box {
+        background: #fff7ed;
+        border: 1px solid #fed7aa;
+        border-radius: 18px;
+        padding: 16px 18px;
+        margin-bottom: 18px;
+        color: #7c2d12;
+    }
+
     .kpi-card {
         background: #ffffff;
         border: 1px solid #e5e7eb;
@@ -103,7 +112,35 @@ def clean_domain(value: str) -> str:
     return f"{ext.domain}.{ext.suffix}"
 
 
+def safe_number(value, default=0.0):
+    try:
+        if value is None:
+            return default
+
+        text = str(value).replace(",", "").replace("%", "").strip()
+
+        if text == "" or text.lower() in ["nan", "none", "na", "n/a"]:
+            return default
+
+        return float(text)
+
+    except Exception:
+        return default
+
+
+def is_missing(value) -> bool:
+    if value is None:
+        return True
+
+    text = str(value).strip().lower()
+
+    return text in ["", "nan", "none", "na", "n/a", "-"]
+
+
 def traffic_bucket(value) -> str:
+    if is_missing(value):
+        return "Need Check"
+
     try:
         v = float(str(value).replace(",", "").strip())
     except Exception:
@@ -120,13 +157,6 @@ def traffic_bucket(value) -> str:
     if v < 10000:
         return "Good"
     return "High"
-
-
-def safe_number(value, default=0.0):
-    try:
-        return float(str(value).replace(",", "").replace("%", "").strip())
-    except Exception:
-        return default
 
 
 def check_live_status(domain: str) -> dict:
@@ -220,14 +250,31 @@ def google_index_link(domain: str) -> str:
 
 
 def ahrefs_link(domain: str) -> str:
-    return f"https://ahrefs.com/traffic-checker/?input={domain}"
+    return "https://ahrefs.com/traffic-checker/"
 
 
-def moz_link(domain: str) -> str:
-    return f"https://moz.com/domain-analysis?site={domain}"
+def whois_link(domain: str) -> str:
+    return f"https://www.whois.com/whois/{domain}"
+
+
+def dapa_link(domain: str) -> str:
+    return "https://www.dapachecker.org/spam-score-checker"
 
 
 def score_site(row) -> tuple:
+    missing_required = []
+
+    for col in ["DA", "Spam Score", "Ahrefs Traffic", "Indexed Pages"]:
+        if is_missing(row.get(col, "")):
+            missing_required.append(col)
+
+    if missing_required:
+        return (
+            0,
+            "Need Manual Check",
+            "Missing: " + ", ".join(missing_required)
+        )
+
     score = 0
     reasons = []
 
@@ -245,6 +292,8 @@ def score_site(row) -> tuple:
     if live == "Live":
         score += 15
         reasons.append("site live")
+    elif live == "Skipped":
+        reasons.append("live check skipped")
     else:
         score -= 30
         reasons.append("site not opening")
@@ -265,8 +314,6 @@ def score_site(row) -> tuple:
     elif da > 0:
         score += 2
         reasons.append("DA low")
-    else:
-        reasons.append("DA missing")
 
     if pa >= 30:
         score += 8
@@ -275,9 +322,7 @@ def score_site(row) -> tuple:
         score += 3
         reasons.append("PA low/average")
 
-    if spam == 0:
-        reasons.append("spam missing")
-    elif spam <= 3:
+    if spam <= 3:
         score += 15
         reasons.append("spam low")
     elif spam <= 10:
@@ -300,7 +345,8 @@ def score_site(row) -> tuple:
         score += 5
         reasons.append("traffic low")
     else:
-        reasons.append("traffic missing/very low")
+        score -= 10
+        reasons.append("traffic very low")
 
     if age >= 3:
         score += 15
@@ -323,11 +369,9 @@ def score_site(row) -> tuple:
     elif indexed >= 20:
         score += 3
         reasons.append("low indexed pages")
-    elif indexed > 0:
-        score -= 5
-        reasons.append("very low indexed pages")
     else:
-        reasons.append("index pages missing")
+        score -= 10
+        reasons.append("very low/no indexed pages")
 
     if price > 0:
         if score >= 70 and price <= 1500:
@@ -402,7 +446,7 @@ st.markdown(
     """
     <div class="main-title">Guest Posting Site Analyzer</div>
     <div class="sub-title">
-        Domain list paste karo, DA/PA/Spam/Traffic fill karo, aur app Good / Average / Risky / Avoid decision dega.
+        Domain list paste karo, quick check links open karo, values fill karo, aur final decision lo.
     </div>
     """,
     unsafe_allow_html=True
@@ -411,8 +455,18 @@ st.markdown(
 st.markdown(
     """
     <div class="info-box">
-        <b>Free MVP:</b> Website live check, HTTPS, WHOIS domain age, duplicate clean-up automatic hai.
-        Ahrefs Traffic, DA, PA, Spam Score manually fill karne ke liye editable table diya gaya hai.
+        <b>Workflow:</b> Domain list paste/upload → Ahrefs, Whois, DAPA, Google index links open karo →
+        DA/PA/Spam/Traffic/Indexed pages fill karo → app Good / Average / Risky / Avoid decision dega.
+    </div>
+    """,
+    unsafe_allow_html=True
+)
+
+st.markdown(
+    """
+    <div class="warning-box">
+        <b>Note:</b> App fake DA/Traffic/Spam values generate nahi karega.
+        Agar important fields blank rahenge to Decision <b>Need Manual Check</b> aayega.
     </div>
     """,
     unsafe_allow_html=True
@@ -431,9 +485,9 @@ with st.sidebar:
     )
 
     run_live = st.checkbox("Live/HTTPS check run karo", value=True)
-    run_whois = st.checkbox("WHOIS domain age check run karo", value=True)
+    run_whois = st.checkbox("WHOIS domain age auto-check run karo", value=True)
 
-    st.caption("WHOIS check slow ho sakta hai. Pehle 20-50 domains se test karo.")
+    st.caption("WHOIS auto-check slow/fail ho sakta hai. Whois.com link bhi table me diya hai.")
 
 
 domains = []
@@ -478,11 +532,23 @@ if not domains:
     st.stop()
 
 
-if "guest_df" not in st.session_state:
+if "last_domains_text" not in st.session_state:
+    st.session_state.last_domains_text = ""
+
+current_domains_text = "\n".join(domains)
+
+if (
+    "guest_df" not in st.session_state
+    or st.session_state.last_domains_text != current_domains_text
+):
     st.session_state.guest_df = build_initial_df(domains)
+    st.session_state.last_domains_text = current_domains_text
 
 if st.button("Prepare / Reset Domain Table"):
     st.session_state.guest_df = build_initial_df(domains)
+    st.session_state.last_domains_text = current_domains_text
+    if "result_df" in st.session_state:
+        del st.session_state.result_df
     st.rerun()
 
 
@@ -549,8 +615,7 @@ st.markdown("---")
 st.subheader("1. Fill Manual Metrics")
 
 st.caption(
-    "Yahan DA, PA, Spam Score, Ahrefs Traffic, Indexed Pages, Price fill kar sakte ho. "
-    "Baaki checks app automatically add karega."
+    "Ahrefs se traffic, DAPA checker se DA/PA/Spam, Google site:domain se indexed pages ka idea fill karo."
 )
 
 edited_df = st.data_editor(
@@ -578,16 +643,18 @@ st.subheader("2. Quick Manual Check Links")
 
 link_df = edited_df[["Domain"]].copy()
 link_df["Ahrefs Traffic Checker"] = link_df["Domain"].apply(ahrefs_link)
+link_df["Whois Check"] = link_df["Domain"].apply(whois_link)
+link_df["DA PA Spam Checker"] = link_df["Domain"].apply(dapa_link)
 link_df["Google Index Check"] = link_df["Domain"].apply(google_index_link)
-link_df["Moz DA/PA Check"] = link_df["Domain"].apply(moz_link)
 
 st.dataframe(
     link_df,
     use_container_width=True,
     column_config={
         "Ahrefs Traffic Checker": st.column_config.LinkColumn("Ahrefs Traffic Checker"),
+        "Whois Check": st.column_config.LinkColumn("Whois Check"),
+        "DA PA Spam Checker": st.column_config.LinkColumn("DA PA Spam Checker"),
         "Google Index Check": st.column_config.LinkColumn("Google Index Check"),
-        "Moz DA/PA Check": st.column_config.LinkColumn("Moz DA/PA Check"),
     }
 )
 
@@ -649,10 +716,20 @@ if st.button("Run Guest Posting Analysis", type="primary"):
     result_df["Decision"] = [x[1] for x in scores]
     result_df["Reason"] = [x[2] for x in scores]
 
+    decision_order = {
+        "Good": 1,
+        "Average": 2,
+        "Risky": 3,
+        "Need Manual Check": 4,
+        "Avoid": 5,
+    }
+
+    result_df["Decision Order"] = result_df["Decision"].map(decision_order).fillna(99)
+
     result_df = result_df.sort_values(
-        by=["Decision", "Score"],
+        by=["Decision Order", "Score"],
         ascending=[True, False]
-    ).reset_index(drop=True)
+    ).drop(columns=["Decision Order"]).reset_index(drop=True)
 
     st.session_state.result_df = result_df
 
@@ -667,7 +744,7 @@ if "result_df" in st.session_state:
     st.markdown("---")
     st.subheader("Final Result")
 
-    r1, r2, r3, r4 = st.columns(4)
+    r1, r2, r3, r4, r5 = st.columns(5)
 
     with r1:
         st.metric("Good", int((result_df["Decision"] == "Good").sum()))
@@ -679,12 +756,15 @@ if "result_df" in st.session_state:
         st.metric("Risky", int((result_df["Decision"] == "Risky").sum()))
 
     with r4:
+        st.metric("Need Check", int((result_df["Decision"] == "Need Manual Check").sum()))
+
+    with r5:
         st.metric("Avoid", int((result_df["Decision"] == "Avoid").sum()))
 
     decision_filter = st.multiselect(
         "Decision filter",
-        ["Good", "Average", "Risky", "Avoid"],
-        default=["Good", "Average", "Risky", "Avoid"]
+        ["Good", "Average", "Risky", "Need Manual Check", "Avoid"],
+        default=["Good", "Average", "Risky", "Need Manual Check", "Avoid"]
     )
 
     filtered_df = result_df[result_df["Decision"].isin(decision_filter)].copy()
@@ -697,9 +777,22 @@ if "result_df" in st.session_state:
         }
     )
 
-    st.download_button(
-        "Download Analysis Excel",
-        data=to_excel(result_df),
-        file_name="guest_posting_site_analysis.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+    good_df = result_df[result_df["Decision"].isin(["Good", "Average"])].copy()
+
+    col_a, col_b = st.columns(2)
+
+    with col_a:
+        st.download_button(
+            "Download Full Analysis Excel",
+            data=to_excel(result_df),
+            file_name="guest_posting_site_analysis.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
+    with col_b:
+        st.download_button(
+            "Download Only Good/Average Sites",
+            data=to_excel(good_df),
+            file_name="good_average_guest_posting_sites.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
